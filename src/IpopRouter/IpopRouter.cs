@@ -50,6 +50,9 @@ namespace Ipop.IpopRouter {
     protected DHCPConfig _dhcp_config;
     protected DateTime _last_check_node;
     protected int _lock;
+    protected bool _single_mode;
+    protected MemBlock _single_mac;
+    protected Dictionary<MemBlock, ARPState> _arp_requests;
 
     public IpopRouter(string NodeConfigPath, string IpopConfigPath) :
       base(NodeConfigPath, IpopConfigPath)
@@ -64,14 +67,34 @@ namespace Ipop.IpopRouter {
       Brunet.HeartBeatEvent += CheckNode;
       _last_check_node = DateTime.UtcNow;
       _lock = 0;
+
+      _single_mode = _ipop_config.SingleMode;
+
+      /// a bit of a hack until we really get the single mode rolling
+      /// the address is the TapIpop's MAC address
+      if(_single_mode) {
+        byte[] mac = (byte[]) Ethernet.Address;
+        mac[5]++;
+        _single_mac = MemBlock.Reference(mac);
+        ProtocolLog.WriteIf(IpopLog.DHCPLog, String.Format(
+            "Entering SingleMode, routing only for: {0}",
+            Utils.MemBlockToString(_single_mac, '.')));
+      }
+      _arp_requests = new Dictionary<MemBlock, ARPState>();
     }
 
-    protected void CheckNode(object o, EventArgs ea) {
+    ///<summary>Maintain the state of the Router by: (1) getting a valid DHCPConfig,
+    ///(2) ensuring that outstanding ARPs are responded to (so we can route for them),
+    ///(3) sending a ping so we can maintain our set of addresses</summary>
+    protected void CheckNode(object o, EventArgs ea)
+    {
       lock(_sync) {
         if(_dhcp_config == null) {
           GetDHCPConfig();
           return;
         }
+
+        CheckARPTable();
 
         // The rest doesn't quite work right yet...
         DateTime now = DateTime.UtcNow;
@@ -83,6 +106,51 @@ namespace Ipop.IpopRouter {
       ThreadPool.QueueUserWorkItem(CheckNetwork);
     }
 
+    ///<summary>Are there any outstanding ARPs we should check on?  Every second
+    ///we wait, more packets are lost!</summary>
+    protected void CheckARPTable()
+    {
+      DateTime now = DateTime.UtcNow;
+      List<MemBlock> to_respond = new List<MemBlock>();
+      foreach(KeyValuePair<MemBlock, ARPState> kvp in _arp_requests) {
+        if((now - kvp.Value.CreateTime).TotalSeconds < 5) {
+          continue;
+        }
+        to_respond.Add(kvp.Key);
+      }
+
+      foreach(MemBlock ip in to_respond) {
+        _arp_requests[ip].Respond(Ethernet);
+        _arp_requests.Remove(ip);
+      }
+    }
+
+    ///<summary>Keeps track of an ARP packet and the time we received it.</summary>
+    protected class ARPState {
+      public readonly ARPPacket Packet;
+      public readonly DateTime CreateTime;
+
+      public ARPState(ARPPacket packet) {
+        Packet = packet;
+        CreateTime = DateTime.UtcNow;
+      }
+
+      ///<summary>Let's go ahead and respond to this ARP in another thread!</summary>
+      public void Respond(Ethernet ether) {
+        WaitCallback wcb = delegate(object o) {
+          ProtocolLog.WriteIf(IpopLog.ARP, "IP not found locally: " +
+              Utils.MemBlockToString(Packet.TargetProtoAddress, '.'));
+          ARPPacket response = Packet.Respond(EthernetPacket.UnicastAddress);
+
+          EthernetPacket res_ep = new EthernetPacket(Packet.SenderHWAddress,
+            EthernetPacket.UnicastAddress, EthernetPacket.Types.ARP,
+            response.ICPacket);
+          ether.Send(res_ep.ICPacket);
+        };
+
+        ThreadPool.QueueUserWorkItem(wcb);
+      }
+    }
 
     /// <summary>Parses ARP Packets and writes to the Ethernet the translation.</summary>
     /// <remarks>IpopRouter makes nodes think they are in the same Layer 2 network
@@ -108,7 +176,6 @@ namespace Ipop.IpopRouter {
         return;
       }
 
-
       if(ap.Operation == ARPPacket.Operations.Reply) {
         // This would be a unsolicited ARP
         if(ap.TargetProtoAddress.Equals(IPPacket.BroadcastAddress) &&
@@ -116,11 +183,27 @@ namespace Ipop.IpopRouter {
         {
           HandleNewStaticIP(ap.SenderHWAddress, ap.SenderProtoAddress);
         }
+
+        // Got a response, let's remove this from the table (currently for _single_mode only)
+        if(ap.TargetHWAddress.Equals(EthernetPacket.UnicastAddress)) {
+          lock(_sync) {
+            if(_arp_requests.Remove(ap.SenderProtoAddress)) {
+              ProtocolLog.WriteIf(IpopLog.ARP, "IP found locally: " +
+                  Utils.MemBlockToString(ap.SenderProtoAddress, '.'));
+            }
+          }
+        }
+
         return;
       }
 
       // We only support request operation hereafter
       if(ap.Operation != ARPPacket.Operations.Request) {
+        return;
+      }
+
+      // In single mode, we only reply to local ARP requests
+      if(_single_mode && !ap.SenderHWAddress.Equals(_single_mac)) {
         return;
       }
 
@@ -133,17 +216,37 @@ namespace Ipop.IpopRouter {
         return;
       }
 
+
       // We shouldn't be returning these messages if no one exists at that end
       // point
-     if(!ap.TargetProtoAddress.Equals(MemBlock.Reference(_dhcp_server.ServerIP))) {
-       Address baddr = _address_resolver.Resolve(ap.TargetProtoAddress);
-       if(Brunet.Address.Equals(baddr) || baddr == null) {
-         return;
-       }
-     }
+      if(!ap.TargetProtoAddress.Equals(MemBlock.Reference(_dhcp_server.ServerIP))) {
+        Address baddr = _address_resolver.Resolve(ap.TargetProtoAddress);
+        if(Brunet.Address.Equals(baddr)) {
+          return;
+        } else if(_single_mode) {
+          lock(_sync) {
+            if(_arp_requests.ContainsKey(ap.TargetProtoAddress)) {
+              return;
+            }
+            _arp_requests[ap.TargetProtoAddress] = new ARPState(ap);
+          }
 
-     ProtocolLog.WriteIf(IpopLog.ARP, String.Format("Sending ARP response for: {0}",
-         Utils.MemBlockToString(ap.TargetProtoAddress, '.')));
+          ProtocolLog.WriteIf(IpopLog.ARP, "Sending duplicate request to find: " +
+              Utils.MemBlockToString(ap.TargetProtoAddress, '.'));
+
+          ARPPacket dup = ap.Duplicate(EthernetPacket.UnicastAddress, MemBlock.Reference(_dhcp_server.ServerIP));
+          EthernetPacket ep = new EthernetPacket(EthernetPacket.BroadcastAddress,
+            EthernetPacket.UnicastAddress, EthernetPacket.Types.ARP, dup.ICPacket);
+          Ethernet.Send(ep.ICPacket);
+
+          return;
+        } else if(baddr == null) {
+          return;
+        }
+      }
+
+      ProtocolLog.WriteIf(IpopLog.ARP, String.Format("Sending ARP response for: {0}",
+          Utils.MemBlockToString(ap.TargetProtoAddress, '.')));
 
       ARPPacket response = ap.Respond(EthernetPacket.UnicastAddress);
 
@@ -151,6 +254,14 @@ namespace Ipop.IpopRouter {
         EthernetPacket.UnicastAddress, EthernetPacket.Types.ARP,
         response.ICPacket);
       Ethernet.Send(res_ep.ICPacket);
+    }
+
+    protected override void HandleIPOut(EthernetPacket packet, ISender ret)
+    {
+      if(_single_mode && !packet.SourceAddress.Equals(_single_mac)) {
+        return;
+      }
+      base.HandleIPOut(packet, ret);
     }
 
     protected override void WriteIP(ICopyable packet)
@@ -181,10 +292,6 @@ namespace Ipop.IpopRouter {
     /// nothing!</summary>
     /// <param name="ip">The IP in question.</param>
     protected override void HandleNewStaticIP(MemBlock ether_addr, MemBlock ip) {
-      if(!_ipop_config.AllowStaticAddresses) {
-        return;
-      }
-
       lock(_sync) {
         if(_dhcp_config == null) {
           _pre_dhcp[ether_addr] = ip;
@@ -361,7 +468,6 @@ namespace Ipop.IpopRouter {
       return true;
     }
 
-
     /// <summary>Called when an ethernet address has had its IP address changed
     /// or set for the first time.</summary>
     protected virtual void UpdateMapping(MemBlock ether_addr, MemBlock ip_addr)
@@ -394,6 +500,7 @@ namespace Ipop.IpopRouter {
       if(_dhcp_server == null) {
         return;
       }
+
       MemBlock ether_addr = null;
       if(!_ip_to_ether.TryGetValue(dest_ip, out ether_addr)) {
         ether_addr = EthernetPacket.BroadcastAddress;

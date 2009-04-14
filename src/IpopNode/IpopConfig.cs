@@ -40,6 +40,9 @@ namespace Ipop {
     public bool EndToEndSecurity;
     /// <summary>DHCP base port (67 default)</summary>
     public int DHCPPort;
+    /// <summary>Allows direct connections locally and virtual connections
+    /// consider it a hybrid of router and interface</summary>
+    public bool SingleMode;
     /// <summary>Allow static addresses</summary>
     public bool AllowStaticAddresses;
 

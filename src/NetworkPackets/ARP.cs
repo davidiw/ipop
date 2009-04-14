@@ -103,5 +103,11 @@ namespace NetworkPackets {
       return new ARPPacket(HardwareType, ProtocolType, Operations.Reply,
           response, TargetProtoAddress, SenderHWAddress, target_proto);
     }
+
+    public ARPPacket Duplicate(MemBlock sender_hw, MemBlock sender_proto)
+    {
+      return new ARPPacket(HardwareType, ProtocolType, Operation,
+          sender_hw, sender_proto, TargetHWAddress, TargetProtoAddress);
+    }
   }
 }
