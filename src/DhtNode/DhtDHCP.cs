@@ -120,7 +120,11 @@ namespace Ipop.DhtNode {
 
         while(renew_attempts-- > 0) {
           try {
-            res = _dht.Create(dhcp_key, node_addr, Config.LeaseTime);
+            if(Renew) {
+              res = _dht.Put(dhcp_key, node_addr, Config.LeaseTime);
+            } else {
+              res = _dht.Create(dhcp_key, node_addr, Config.LeaseTime);
+            }
 
             if(hostname != null) {
               _dht.Put(hostname, ip_addr, Config.LeaseTime);
@@ -166,7 +170,7 @@ namespace Ipop.DhtNode {
       Hashtable[] results = dht.Get(ns_key);
 
       if(results.Length == 0) {
-        throw new Exception("Namespace does not exist: " + ipop_namespace);
+        throw new Exception("Try again, check namespace: " + ipop_namespace);
       }
 
       string result = Encoding.UTF8.GetString((byte[]) results[0]["value"]);

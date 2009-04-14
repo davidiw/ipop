@@ -89,6 +89,8 @@ namespace Ipop.DhtNode {
         return true;
       }
 
+      Console.WriteLine("Have {0}, expected {1}", addr, _results[ip]);
+
       Miss(ip);
       return false;
     }
@@ -168,7 +170,9 @@ namespace Ipop.DhtNode {
       try {
         lock(_sync) {
           if(addr != null) {
+            _results.Remove(ip);
             _results[ip] = addr;
+          Console.WriteLine("Set: " + _results[ip] + " "  + addr);
           }
 
           _queued.Remove(ip);
@@ -179,6 +183,21 @@ namespace Ipop.DhtNode {
       catch(Exception e) {
         ProtocolLog.WriteIf(ProtocolLog.Exceptions, String.Format(
               "ERROR: In Resolves unable to remove entry: {0}\n\t{1]", ips, e));
+      }
+    }
+
+    /// <summary>Allows for set, reset, and clear operations.<summary>
+    /// <param name="ip">The ip to act upon.</param>
+    /// <param name="addr">addr == null to clear otherwise set/reset.</param>
+    public void Set(MemBlock ip, Address addr) {
+      Console.WriteLine("Setting.... " + Utils.MemBlockToString(ip, '.') + " " +  addr);
+      lock(_sync) {
+        if(_results.Contains(ip)) {
+          _results.Remove(ip);
+        }
+        if(addr != null) {
+          _results[ip] = addr;
+        }
       }
     }
   }

@@ -26,6 +26,9 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Threading;
 
+using System.Text;
+using Ipop.DhtNode;
+
 namespace Ipop.IpopRouter {
   /// <summary> IpopRouter allows Ipop to provide L3 connectivity between
   /// multiple domains with only a single instance per site.</summary>
@@ -36,7 +39,7 @@ namespace Ipop.IpopRouter {
   /// still provides dynamic IP addresses for all nodes in the combined
   /// cluster, and allows machines in the same cluster to talk directly with
   /// each other. </remarks>
-  public class IpopRouter: CondorIpopNode {
+  public class IpopRouter: CondorIpopNode, IRpcHandler {
     protected Dictionary<MemBlock, MemBlock> _ether_to_ip;
     protected Dictionary<MemBlock, MemBlock> _ip_to_ether;
     protected Dictionary<MemBlock, MemBlock> _pre_dhcp;
@@ -53,6 +56,10 @@ namespace Ipop.IpopRouter {
     protected DateTime _last_check_node;
     protected int _lock;
 
+    RpcManager _rpc;
+    protected Dictionary<MemBlock, Address> _ip_to_addr;
+    protected Hashtable _migrate_table;
+
     public IpopRouter(string NodeConfigPath, string IpopConfigPath) :
       base(NodeConfigPath, IpopConfigPath)
     {
@@ -68,6 +75,11 @@ namespace Ipop.IpopRouter {
       Brunet.HeartBeatEvent += CheckNode;
       _last_check_node = DateTime.UtcNow;
       _lock = 0;
+
+      _rpc = Brunet.Rpc;
+      _rpc.AddHandler("IpopMigration", this);
+      _ip_to_addr = new Dictionary<MemBlock, Address>();
+      _migrate_table = new Hashtable();
     }
 
     /// <summary>Called from Brunet to notify us if we've come connected.</summary>
@@ -86,7 +98,9 @@ namespace Ipop.IpopRouter {
         }
         Brunet.HeartBeatEvent -= CheckNode;
         return;
-
+      }
+    }
+/*
         // The rest doesn't quite work right yet...
         DateTime now = DateTime.UtcNow;
         if((now - _last_check_node).TotalSeconds < 30) {
@@ -96,6 +110,7 @@ namespace Ipop.IpopRouter {
       }
       CheckNetwork();
     }
+    */
 
 
     /// <summary>Parses ARP Packets and writes to the Ethernet the translation.</summary>
@@ -157,6 +172,22 @@ namespace Ipop.IpopRouter {
       IPPacket ipp = new IPPacket(mp);
       MemBlock dest = null;
       if(!_ip_to_ether.TryGetValue(ipp.DestinationIP, out dest)) {
+        if(_ip_to_addr.ContainsKey(ipp.DestinationIP)) {
+          Address addr = _ip_to_addr[ipp.DestinationIP];
+          Address send_to = _address_resolver.Resolve(ipp.SourceIP);
+          if(send_to == null) {
+            return;
+          }
+
+          Console.WriteLine("Calling set to " + addr);
+          Channel result = new Channel();
+          AHSender notifier = new AHExactSender(Brunet, send_to);
+          _rpc.Invoke(notifier, result, "IpopMigration.Set", ipp.DestinationIP, addr.ToMemBlock());
+
+//          AHSender forwarder = new AHExactSender(Brunet, addr);
+//          forwarder.Send(mp);
+        }
+
         return;
       }
 
@@ -182,6 +213,7 @@ namespace Ipop.IpopRouter {
         }
       }
 
+      Console.WriteLine("HandleNewStaticIP: " + Utils.MemBlockToString(ip, '.'));
       DHCPServer dhcp_server = CheckOutDHCPServer(ether_addr);
       if(dhcp_server == null) {
         return;
@@ -195,12 +227,13 @@ namespace Ipop.IpopRouter {
           res_ip = dhcp_server.RequestLease(ip, true,
               Brunet.Address.ToString(),
               _ipop_config.AddressData.Hostname);
-        } catch { }
+        } catch(Exception e) {Console.WriteLine("hmmm: " + e); }
 
         if(res_ip == null) {
           ProtocolLog.WriteIf(IpopLog.DHCPLog, String.Format(
                 "Request for {0} failed!", Utils.MemBlockToString(ip, '.')));
         } else {
+          Migrate(ip);
           UpdateMapping(ether_addr, MemBlock.Reference(res_ip));
         }
 
@@ -363,6 +396,117 @@ namespace Ipop.IpopRouter {
       IpopRouter node = new IpopRouter(args[0], args[1]);
       node.Run();
     }
+
+    public void HandleRpc(ISender caller, string method, IList args, object rs) {
+      Console.WriteLine("Handle rpc.... " + method + " " + caller);
+      object result = null;
+      try {
+        if(method.Equals("Set")) {
+          MemBlock ip = MemBlock.Reference((byte[]) args[0]);
+          Address addr = new AHAddress((byte[]) args[1]);
+          ((DhtAddressResolver) _address_resolver).Set(ip, addr);
+          result = true;
+        } else if(method.Equals("Migrate")) {
+          MemBlock ip = MemBlock.Reference((byte[]) args[0]);
+          AHSender sender = (AHSender) ((ReqrepManager.ReplyState) caller).ReturnPath;
+          Address new_addr = sender.Destination;
+          result = PleaseMigrate(ip, new_addr);
+        } else {
+          throw new Exception("Invalid method");
+        }
+      }
+      catch (Exception e) {
+        Console.WriteLine(e);
+        result = new AdrException(-32602, e);
+      }
+      Console.WriteLine("Returning result for " + method);
+      _rpc.SendResult(rs, result);
+    }
+
+    protected bool PleaseMigrate(MemBlock ip, Address new_addr) {
+      Console.WriteLine("Migrate for: {0} from {1}", Utils.MemBlockToString(ip, '.'), new_addr);
+      MemBlock ether_addr = null;
+      lock(_sync) {
+        if(_ip_to_ether.TryGetValue(ip, out ether_addr)) {
+          _ip_to_ether.Remove(ip);
+          _ether_to_ip.Remove(ether_addr);
+          _ether_to_dhcp_server.Remove(ether_addr);
+        }
+        _ip_to_addr[ip] = new_addr;
+      }
+
+      string str_addr = Utils.MemBlockToString(ip, '.');
+      MemBlock key = MemBlock.Reference(
+          Encoding.UTF8.GetBytes(
+            "dhcp:" + _dhcp_config.Namespace + ":" + str_addr
+            )
+          );
+
+      MemBlock value = MemBlock.Reference(
+          Encoding.UTF8.GetBytes(Brunet.Address.ToString())
+          );
+
+      Channel chan = new Channel(1);
+      chan.CloseEvent += delegate(object o, EventArgs ea) {
+        bool success = false;
+        try {
+          success = (bool) chan.Dequeue();
+        } catch {
+        }
+
+        Console.WriteLine(_ip_to_ether.ContainsKey(ip));
+        Console.WriteLine("Delete: " + success);
+      };
+
+      _dht.AsyncDelete(key, value, chan);
+      Console.WriteLine("Attempting delete...");
+      return true;
+    }
+
+    protected void Migrate(MemBlock ip) {
+      lock(_sync) {
+        if(_migrate_table.Contains(ip)) {
+          Console.WriteLine("Already attempting migration.... " + Utils.MemBlockToString(ip, '.'));
+          return;
+        }
+        _migrate_table[ip] = true;
+      }
+
+      _ip_to_addr.Remove(ip);
+
+      string str_addr = Utils.MemBlockToString(ip, '.');
+      MemBlock key = MemBlock.Reference(
+          Encoding.UTF8.GetBytes(
+            "dhcp:" + _dhcp_config.Namespace + ":" + str_addr
+            )
+          );
+
+      Hashtable[] results = _dht.Get(key);
+      bool same = false;
+
+      foreach(Hashtable result in results) {
+        Address addr = AddressParser.Parse(Encoding.UTF8.GetString((byte[]) result["value"]));
+        if(addr.Equals(Brunet.Address)) {
+          same = true;
+          continue;
+        }
+        Channel q = new Channel();
+
+        q.CloseEvent += delegate(object o, EventArgs ea) {
+          lock(_sync) {
+            _migrate_table.Remove(ip);
+          }
+          Console.WriteLine("Migration complete.... " + addr);
+        };
+
+        AHSender sender = new AHExactSender(Brunet, addr);
+        _rpc.Invoke(sender, q, "IpopMigration.Migrate", ip);
+        Console.WriteLine("Attempting migration... " + addr);
+      }
+      if(results.Length == 0 || (results.Length == 1 && same)) {
+        _migrate_table.Remove(ip);
+        Console.WriteLine("Hmm no need to migrate...");
+      }
+    }
   }
 }
-
