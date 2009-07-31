@@ -34,6 +34,7 @@ namespace Ipop {
   public abstract class DHCPServer {
     /// <summary>The Server's IP Address</summary>
     public readonly byte[] ServerIP;
+    public readonly MemBlock MServerIP;
     /// <summary>The broadcast address for the network.</summary>
     public byte[] Broadcast;
     /// <summary>The netmask for the namespace.</summary>
@@ -91,6 +92,7 @@ namespace Ipop {
       ServerIP = new byte[4];
       BaseIP.CopyTo(ServerIP, 0);
       ServerIP[3] = 1;
+      MServerIP = MemBlock.Reference(ServerIP);
       _reserved_ips[last] = BaseIP;
       _reserved_masks[last] = new byte[4] {255, 255, 255, 254};
       _reserved_masks[slast] = new byte[4] {255, 255, 255, 255};
@@ -139,15 +141,17 @@ namespace Ipop {
 
       options[DHCPPacket.OptionTypes.DOMAIN_NAME] = Encoding.UTF8.GetBytes(DNS.DomainName);
 //  The following option is needed for dhcp to "succeed" in Vista, but they break Linux
-//    options[DHCPPacket.OptionTypes.ROUTER] = reply.ip;
-      options[DHCPPacket.OptionTypes.DOMAIN_NAME_SERVER] = MemBlock.Reference(ServerIP);
+      
+//      options[DHCPPacket.OptionTypes.ROUTER] = MServerIP;
+      options[DHCPPacket.OptionTypes.DOMAIN_NAME_SERVER] = MServerIP;
       options[DHCPPacket.OptionTypes.SUBNET_MASK] = MemBlock.Reference(Netmask);
       options[DHCPPacket.OptionTypes.LEASE_TIME] = _lease_time;
       options[DHCPPacket.OptionTypes.MTU] = _mtu;
-      options[DHCPPacket.OptionTypes.SERVER_ID] = MemBlock.Reference(ServerIP);
+      options[DHCPPacket.OptionTypes.SERVER_ID] = MServerIP;
       options[DHCPPacket.OptionTypes.MESSAGE_TYPE] = MemBlock.Reference(new byte[]{(byte) message_type});
+
       DHCPPacket rpacket = new DHCPPacket(2, packet.xid, packet.ciaddr, reply_ip,
-                               ServerIP, packet.chaddr, options);
+                               ServerIP, IPPacket.ZeroAddress, packet.chaddr, options);
       return rpacket;
     }
 
@@ -173,6 +177,10 @@ namespace Ipop {
 
     // Check range
     public bool IPInRange(byte[] ip) {
+      return IPInRange(MemBlock.Reference(ip));
+    }
+
+    public bool IPInRange(MemBlock ip) {
       for(int i = 0; i < ip.Length; i++) {
         if((ip[i] & Netmask[i]) != BaseIP[i]) {
           return false;

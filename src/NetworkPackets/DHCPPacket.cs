@@ -195,6 +195,8 @@ namespace NetworkPackets.DHCP {
     public readonly MemBlock yiaddr;
     /// <summary>server address</summary>
     public readonly MemBlock siaddr;
+    /// <summary>Gateway Address</summary>
+    public readonly MemBlock giaddr;
     /// <summary>clients hardware address</summary>
     public readonly MemBlock chaddr;
     /// <summary>A hashtable indexed by OptionTypes and numbers of options</summary>
@@ -244,12 +246,22 @@ namespace NetworkPackets.DHCP {
     }
 
     public DHCPPacket(byte op, MemBlock xid, MemBlock ciaddr, MemBlock yiaddr,
-                     MemBlock siaddr, MemBlock chaddr, Dictionary<OptionTypes, MemBlock> Options) {
+        MemBlock siaddr, MemBlock chaddr, Dictionary<OptionTypes, MemBlock> Options) :
+      this(op, xid, ciaddr, yiaddr, siaddr, IPPacket.ZeroAddress,
+            chaddr, Options)
+    {
+    }
+
+    public DHCPPacket(byte op, MemBlock xid, MemBlock ciaddr, MemBlock yiaddr,
+        MemBlock siaddr, MemBlock giaddr, MemBlock chaddr,
+        Dictionary<OptionTypes, MemBlock> Options) 
+    {
       this.op = op;
       this.xid = xid;
       this.ciaddr = ciaddr;
       this.yiaddr = yiaddr;
       this.siaddr = siaddr;
+      this.giaddr = giaddr;
       this.chaddr = chaddr;
       this.Options = Options;
 
@@ -266,9 +278,7 @@ namespace NetworkPackets.DHCP {
       ciaddr.CopyTo(header, 12);
       yiaddr.CopyTo(header, 16);
       siaddr.CopyTo(header, 20);
-      for(int i = 24; i < 28; i++) {
-        header[i] = 0;
-      }
+      giaddr.CopyTo(header, 24);
       chaddr.CopyTo(header, 28);
       for(int i = 34; i < 236; i++) {
         header[i] = 0;
