@@ -146,6 +146,30 @@ namespace NetworkPackets {
     /// <summary>The protocol for this packet.</summary>
     public readonly Protocols Protocol;
 
+    /// <summary>The source port for the packet, this may or may not be
+    /// valid depending on the protocol type.</summary>
+    public int SourcePort { 
+      get {
+        if(_source_port == -1) {
+          _source_port = (Packet[20] << 8) | Packet[21];
+        }
+        return _source_port;
+      }
+    }
+    protected int _source_port = -1;
+
+    /// <summary>The destination port for the packet, this may or may not be
+    /// valid depending on the protocol type.</summary>
+    public int DestinationPort {
+      get {
+        if(_source_port == -1) {
+          _destination_port = (Packet[22] << 8) | Packet[23];
+        }
+        return _destination_port;
+      }
+    }
+    protected int _destination_port = -1;
+
     /**
     <summary>Takes in a MemBlock and parses it into IP Header fields</summary>
     <param name="Packet">The IP Packet to parse.</param>
