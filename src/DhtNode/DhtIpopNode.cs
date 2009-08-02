@@ -36,7 +36,7 @@ namespace Ipop.DhtNode {
   /// <summary>This class provides an IpopNode that does address and name
   /// resolution using Brunet's Dht.  Multicast is supported.</summary>
   public class DhtIpopNode: IpopNode {
-    public static readonly int GATEWAY_TTL = 30 * 60 * 1000;
+    public static readonly int GATEWAY_TTL = 30 * 60;
     ///<summary>Creates a DhtIpopNode.</summary>
     /// <param name="NodeConfig">NodeConfig object</param>
     /// <param name="IpopConfig">IpopConfig object</param>
