@@ -44,7 +44,11 @@ namespace Ipop {
     public bool AllowStaticAddresses;
     /// <summary>DNS Type, default none</summary>
     public string DNSType;
-
+    /// <summary>Parameters for VPN Server Full Tunnel.</summary>
+    public bool ServerFullTunnel;
+    /// <summary>Enables VPN Client Full Tunnel.</summary>
+    public bool ClientFullTunnel;
+    /// <summary>Provides GroupVPN configuration information.</summary>
     public GroupVPNInfo GroupVPN;
 
     /**
@@ -73,7 +77,7 @@ namespace Ipop {
     }
 
     /// <summary>Path to the configs file system location.</summary>
-    [NonSerialized]
+    [XmlIgnoreAttribute]
     public string Path;
 
     /// <summary>Writres the config to the file system.</summary>

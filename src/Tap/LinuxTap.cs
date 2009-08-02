@@ -38,11 +38,9 @@ namespace Ipop.Tap {
     
     [StructLayout(LayoutKind.Sequential)]
     private struct sockaddr { // bits/socket.h 
-      [MarshalAs(UnmanagedType.ByValTStr, SizeConst=14)]
-      public string sa_data;
-      // padding to 16 bytes
-      [MarshalAs(UnmanagedType.ByValTStr, SizeConst=2)]
-      public string data;
+      public short sa_family;
+      [MarshalAs(UnmanagedType.ByValArray, SizeConst=14)]
+      public byte[] sa_data;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -88,7 +86,7 @@ namespace Ipop.Tap {
 
       ifr1.ifru_flags = IFF_TAP | IFF_NO_PI;
       ifr1.ifrn_name = dev;
-      if (ioctl(fd, TUNSETIFF, ref ifr1) < 0) {
+      if(ioctl(fd, TUNSETIFF, ref ifr1) < 0) {
         Syscall.close(fd);
         throw new Exception("TUNSETIFF failed");
       }
@@ -102,12 +100,15 @@ namespace Ipop.Tap {
 
       ifreq2 ifr2 = new ifreq2();
       ifr2.ifrn_name = dev; // ioctl changed the name?
-      if(ioctl(ctrl_fd, SIOCGIFHWADDR, ref ifr2) <0) {
-        Console.WriteLine("Failed to get hw addr.");
+      if(ioctl(ctrl_fd, SIOCGIFHWADDR, ref ifr2) < 0) {
         Syscall.close(ctrl_fd);
         throw new Exception("Failed to get hw addr.");
       }
-      _addr =  MemBlock.Reference(ASCIIEncoding.UTF8.GetBytes(ifr2.ifr_hwaddr.sa_data));
+      Syscall.close(ctrl_fd);
+
+      byte[] addr = new byte[6];
+      Array.Copy(ifr2.ifr_hwaddr.sa_data, 0, addr, 0, 6);
+      _addr = MemBlock.Reference(addr);
     }
 
     unsafe public override int Write(byte[] packet, int length)

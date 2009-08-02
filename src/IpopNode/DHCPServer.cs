@@ -106,7 +106,7 @@ namespace Ipop {
           (byte) (Config.LeaseTime >> 24),
           (byte) (Config.LeaseTime >> 16),
           (byte) (Config.LeaseTime >> 8),
-          (byte) (Config.LeaseTime),
+          (byte) (Config.LeaseTime)
         });
     }
 

@@ -25,6 +25,7 @@ using NetworkPackets.DHCP;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Net;
 using System.Threading;
 
 /// \namespace Ipop
@@ -73,6 +74,10 @@ namespace Ipop {
     protected readonly bool _multicast;
     /// <summary>Enables broadcast.</summary>
     protected readonly bool _broadcast;
+    /// <summary>Enables the use of a remote gateway.</summary>
+    protected IGatewaySelector _gateway_selector;
+    /// <summary>Enables this endpoint to be a gateway.</summary>
+    protected readonly bool _gateway;
     /// <summary>Enables IP over secure senders.</summary>
     protected bool _secure_senders;
     protected Information _info;
@@ -81,9 +86,45 @@ namespace Ipop {
     protected Dictionary<MemBlock, MemBlock> _ether_to_ip;
     /// <summary>Mapping of IP Address to Ethernet Address</summary>
     protected Dictionary<MemBlock, MemBlock> _ip_to_ether;
-
+    /// <summary>Gateway Handler</summary>
+    protected GatewayHandler _gwh;
     /// <summary>Provides network information, used to get lease information.<summary>
-    protected DHCPServer _dhcp_server;
+    private DHCPServer __dhcp_server;
+    protected DHCPServer _dhcp_server {
+      get {
+        return __dhcp_server;
+      }
+      set {
+        __dhcp_server = value;
+        if(_gwh == null) {
+          return;
+        }
+
+        int mask = 0;
+        bool found = false;
+        byte[] bmask = _dhcp_server.Netmask;
+        for(int i = 0; i < bmask.Length; i++) {
+          for(int j = 0; j < 8; j++, mask++) {
+            if(bmask[i] >> j == 0) {
+              found = true;
+              break;
+            }
+          }
+          if(found) {
+            break;
+          }
+        }
+
+        IPAddress ipaddr = new IPAddress(_dhcp_server.ServerIP);
+        TAAuthorizer ntta = new NetmaskTAAuthorizer(ipaddr, mask,
+            TAAuthorizer.Decision.Deny, TAAuthorizer.Decision.None);
+
+        foreach(EdgeListener el in _node.EdgeListenerList) {
+          el.TAAuth = new SeriesTAAuthorizer(new TAAuthorizer[]{ntta, el.TAAuth});
+        }
+      }
+    }
+
     /// <summary>Port number to use for the DHCP Server, typically 67.</summary>
     protected readonly int _dhcp_server_port;
     /// <summary>Port number to use for the DHCP Client, typically 68.</summary>
@@ -112,7 +153,21 @@ namespace Ipop {
     public IpopNode(NodeConfig node_config, IpopConfig ipop_config,
         DHCPConfig dhcp_config) : base(node_config)
     {
+      if(ipop_config.ClientFullTunnel && ipop_config.ServerFullTunnel) {
+        throw new Exception("You cannot enable Full Tunnel for both VPN Client and Server.");
+      }
       CreateNode();
+
+      _gateway = ipop_config.ServerFullTunnel;
+      if(ipop_config.ClientFullTunnel) {
+        _gwh = GatewayHandler.GetGetewayHandler(ipop_config.VirtualNetworkDevice);
+        foreach(EdgeListener el in _node.EdgeListenerList) {
+          GatewayTAAuthorizer gtta = new GatewayTAAuthorizer(_gwh, el);
+          _shutdown.OnExit += gtta.Cleanup;
+          el.TAAuth = gtta;
+        }
+      }
+
       this.Brunet = _node;
       _ipop_config = ipop_config;
 
@@ -228,15 +283,20 @@ namespace Ipop {
 
       IPPacket ipp = new IPPacket(packet);
 
-      if(!_address_resolver.Check(ipp.SourceIP, addr)) {
-        return;
-      }
-
       if(IpopLog.PacketLog.Enabled) {
         ProtocolLog.Write(IpopLog.PacketLog, String.Format(
                           "Incoming packet:: IP src: {0}, IP dst: {1}, p2p " +
                               "from: {2}, size: {3}", ipp.SSourceIP, ipp.SDestinationIP,
                               ret, packet.Length));
+      }
+
+      // Packet isn't destined to us
+      if(!_dhcp_server.IPInRange(ipp.SourceIP) || !_address_resolver.Check(ipp.SourceIP, addr)) {
+        // If we aren't a gateway or we are a gateway and this is a packet in
+        // our subnet this is a misdirected packet
+        if(_gwh == null) {
+          return;
+        }
       }
 
       WriteIP(packet);
@@ -257,7 +317,11 @@ namespace Ipop {
                           ipp.Protocol, ipp.SSourceIP, ipp.SDestinationIP));
       }
 
-      if(!IsLocalIP(ipp.SourceIP)) {
+      // Is this a well known LocalIP?  If it isn't, is it in our subnet
+      // range?  If is, we must attempt to statically allocate it!
+      if(!IsLocalIP(ipp.SourceIP) && _dhcp_server != null &&
+          _dhcp_server.IPInRange(ipp.SourceIP))
+      {
         HandleNewStaticIP(packet.SourceAddress, ipp.SourceIP);
         return;
       }
@@ -281,6 +345,13 @@ namespace Ipop {
             }
           }
           break;
+      }
+
+      // This packet isn't a local area network packet...
+      if(!_dhcp_server.IPInRange(ipp.DestinationIP)) {
+        if(HandleIPOutOfRange(ipp)) {
+          return;
+        }
       }
 
       if(HandleOther(ipp)) {
@@ -316,8 +387,7 @@ namespace Ipop {
       ARPPacket ap = new ARPPacket(packet);
 
       // Not in our range!
-      if(!_dhcp_server.IPInRange((byte[]) ap.TargetProtoAddress) &&
-          !_dhcp_server.IPInRange((byte[]) ap.SenderProtoAddress))
+      if(!_dhcp_server.IPInRange((byte[]) ap.TargetProtoAddress))
       {
         ProtocolLog.WriteIf(IpopLog.ARP, String.Format("Bad ARP request from {0} for {1}",
             Utils.MemBlockToString(ap.SenderProtoAddress, '.'),
@@ -398,6 +468,24 @@ namespace Ipop {
       return false;
     }
 
+    /// <summary>The destination is for an IP Address that is not in our
+    /// local network, if we are supporting full tunnel, we can forward it to
+    /// an appropriate gateway.</summary>
+    /// <param name="ipp">The IPPacket for an out of range destination.</param>
+    /// <returns>True if the called should not process the packet further.</param>
+    protected virtual bool HandleIPOutOfRange(IPPacket ipp) {
+      if(_gateway_selector == null) {
+        return true;
+      }
+
+      // let's direct it to the remote gateway
+      Address target = _gateway_selector.SelectGateway(ipp);
+      if(target != null) {
+        SendIP(target, ipp.Packet);
+      }
+      return true;
+    }
+
     /// <summary>Sends the IP Packet to the specified target address.</summary>
     /// <param name="target"> the Brunet Address of the target</param>
     /// <param name="packet"> the data to send to the recepient</param>
@@ -430,10 +518,15 @@ namespace Ipop {
       IPPacket ipp = new IPPacket(mp);
       MemBlock dest = null;
       if(!_ip_to_ether.TryGetValue(ipp.DestinationIP, out dest)) {
-        return;
+        // If we are a gateway, let's forward it to the TAP device
+        // if not, we'll ignore it
+        if(!_gateway) {
+          return;
+        }
+        dest = Ethernet.Address;
       }
 
-      EthernetPacket res_ep = new EthernetPacket(_ip_to_ether[ipp.DestinationIP],
+      EthernetPacket res_ep = new EthernetPacket(dest,
           EthernetPacket.UnicastAddress, EthernetPacket.Types.IP, mp);
       Ethernet.Send(res_ep.ICPacket);
     }
@@ -576,11 +669,12 @@ namespace Ipop {
             }
             if(new_entry) {
               if(_static_mapping.ContainsKey(ether_addr)) {
-                _static_mapping[ether_addr].Dispose();
+                _static_mapping[ether_addr].Stop();
               }
               _static_mapping[ether_addr] = new SimpleTimer(wcb, null,
                   _dhcp_config.LeaseTime * 1000 / 2,
                   _dhcp_config.LeaseTime * 1000 / 2);
+              _static_mapping[ether_addr].Start();
             }
             UpdateMapping(ether_addr, MemBlock.Reference(res_ip));
           }
@@ -685,12 +779,12 @@ namespace Ipop {
 
     /// <summary>Called when an ethernet address has had its IP address changed
     /// or set for the first time.</summary>
-    protected virtual void UpdateMapping(MemBlock ether_addr, MemBlock ip_addr)
+    protected virtual bool UpdateMapping(MemBlock ether_addr, MemBlock ip_addr)
     {
       lock(_sync) {
         if(_ether_to_ip.ContainsKey(ether_addr)) {
           if(_ether_to_ip[ether_addr].Equals(ip_addr)) {
-            return;
+            return false;
           }
 
           MemBlock old_ip = _ether_to_ip[ether_addr];
@@ -705,6 +799,12 @@ namespace Ipop {
         "IP Address for {0} changed to {1}.",
         BitConverter.ToString((byte[]) ether_addr).Replace("-", ":"),
         Utils.MemBlockToString(ip_addr, '.')));
+
+      if(_gwh != null && !_gwh.SwappedGateway) {
+        _gwh.ReplaceDefaultGateway(Utils.MemBlockToString(_dhcp_server.MServerIP, '.'));
+        _shutdown.OnExit += delegate() { _gwh.RestoreDefaultGateway(); };
+      }
+      return true;
     }
 
     ///<summary>This let's us discover all machines in our subnet if and
@@ -741,5 +841,16 @@ namespace Ipop {
     /// <param name="from">The Brunet address the packet was sent from.</param>
     /// <returns>The translated IP Packet.</returns>
     MemBlock Translate(MemBlock packet, Address from);
+  }
+
+  /// <summary>Allows a user to implement some mechanism of load balancing remote
+  /// gateway usage.</summary>
+  public interface IGatewaySelector {
+    /// <summary>Input is an IPPacket, which we want to route to a gateway, the
+    /// GatewaySelector returns back an Address of a remote gateway to send the
+    /// packet to.</summary>
+    /// <param name="ipp">An outgoing ip packet to route to the gateway.</param>
+    /// <returns>The remote gateway to send the packet to.</returns>
+    Address SelectGateway(IPPacket ipp);
   }
 }

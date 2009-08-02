@@ -23,6 +23,7 @@ using Ipop;
 using NetworkPackets;
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -35,13 +36,23 @@ namespace Ipop.DhtNode {
   /// <summary>This class provides an IpopNode that does address and name
   /// resolution using Brunet's Dht.  Multicast is supported.</summary>
   public class DhtIpopNode: IpopNode {
+    public static readonly int GATEWAY_TTL = 30 * 60 * 1000;
     ///<summary>Creates a DhtIpopNode.</summary>
     /// <param name="NodeConfig">NodeConfig object</param>
     /// <param name="IpopConfig">IpopConfig object</param>
     public DhtIpopNode(NodeConfig node_config, IpopConfig ipop_config,
         DHCPConfig dhcp_config) : base(node_config, ipop_config, dhcp_config)
     {
-      _address_resolver = new DhtAddressResolver(Dht, _ipop_config.IpopNamespace);
+      _address_resolver = new DhtAddressResolver(Dht, ipop_config.IpopNamespace);
+      if(ipop_config.ClientFullTunnel) {
+        _gateway_selector = new DhtGatewaySelector(Dht, ipop_config.IpopNamespace);
+      }
+
+      if(ipop_config.ServerFullTunnel) {
+        string key = "vpntunnel:" + _ipop_config.IpopNamespace;
+        MemBlock mkey = MemBlock.Reference(Encoding.UTF8.GetBytes(key));
+        _dht_proxy.Register(mkey, _node.Address.ToMemBlock(), GATEWAY_TTL);
+      }
     }
 
     public DhtIpopNode(NodeConfig node_config, IpopConfig ipop_config) :
