@@ -80,10 +80,10 @@ namespace Ipop {
     /// copied to a minimum sized MemBlock and send to the subscriber. </remarks>
     protected void ReadLoop()
     {
-      try {
-        byte[] read_buffer = new byte[MTU];
-        BufferAllocator ba = new BufferAllocator(MTU, 1.1);
-        while(_running) {
+      byte[] read_buffer = new byte[MTU];
+      BufferAllocator ba = new BufferAllocator(MTU, 1.1);
+      while(_running) {
+        try {
           int length  = _tap.Read(read_buffer);
           if (length == 0 || length == -1) {
             ProtocolLog.WriteIf(ProtocolLog.Exceptions, "Couldn't read TAP");
@@ -98,13 +98,13 @@ namespace Ipop {
           if(s != null) {
             s.Handle(packet, this);
           }
+        } catch(ThreadInterruptedException x) {
+          if(_running && ProtocolLog.Exceptions.Enabled) {
+            ProtocolLog.Write(ProtocolLog.Exceptions, x.ToString());
+          }
+        } catch(Exception e) {
+          ProtocolLog.WriteIf(ProtocolLog.Exceptions, e.ToString());
         }
-      } catch(ThreadInterruptedException x) {
-        if(_running && ProtocolLog.Exceptions.Enabled) {
-          ProtocolLog.Write(ProtocolLog.Exceptions, x.ToString());
-        }
-      } catch(Exception e) {
-        ProtocolLog.WriteIf(ProtocolLog.Exceptions, e.ToString());
       }
     }
 
