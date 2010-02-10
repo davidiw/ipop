@@ -8,48 +8,32 @@
   <target name="clean" description="Remove build directory">
     <delete dir="${build.dir}" failonerror="true"/>
   </target>
-
   <target name="build" description="Nothing to build">
+  </target>
+
+  <target name="test" description="Build Stream.dll">
     <mkdir dir="${build.dir}" failonerror="true"/>
     <copy todir="${build.dir}" failonerror="true">
       <fileset basedir="${lib.dir}">
         <include name="Brunet.dll" />
-      </fileset>
-    </copy>
-    <csc target="library" output="${build.dir}/NetworkPackets.dll">
-      <sources failonempty="true">
-        <include name="*.cs"/>
-      </sources>
-      <references basedir="${build.dir}">
-        <include name="Brunet.dll"/>
-      </references>
-    </csc>
-    <copy todir="${lib.dir}" failonerror="true">
-      <fileset basedir="${build.dir}">
+        <include name="Brunet.Mock.dll" />
         <include name="NetworkPackets.dll" />
       </fileset>
     </copy>
-  </target>
-
-  <target name="test" description="Build NetworkPackets.dll">
-    <mkdir dir="${build.dir}" failonerror="true"/>
-    <copy todir="${build.dir}" failonerror="true">
-      <fileset basedir="${lib.dir}">
-        <include name="Brunet.dll" />
-      </fileset>
-    </copy>
-    <csc target="library" define="NUNIT" output="${build.dir}/NetworkPackets.Test.dll">
+    <csc debug="true" target="library" define="NUNIT" output="${build.dir}/Stream.Test.dll">
       <sources failonempty="true">
         <include name="*.cs"/>
       </sources>
       <references basedir="${build.dir}">
         <include name="Brunet.dll"/>
+        <include name="Brunet.Mock.dll" />
+        <include name="NetworkPackets.dll" />
         <include name="nunit.framework.dll" />
       </references>
     </csc>
     <nunit2>
       <formatter type="Plain" />
-      <test assemblyname="${build.dir}/NetworkPackets.Test.dll"/>
+      <test assemblyname="${build.dir}/Stream.Test.dll"/>
     </nunit2>
   </target>
 </project>
