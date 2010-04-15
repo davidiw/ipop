@@ -89,8 +89,7 @@ namespace Ipop {
         // The above resolver failed, let's see if another resolver works
         if(_forward_queries) {
           try {
-            byte[] result = Resolve(_name_server, (byte[]) dnspacket.Packet);
-            rdnspacket = MemBlock.Reference(result);
+            rdnspacket = Resolve(_name_server, (byte[]) dnspacket.Packet);
           } catch(Exception ex) {
             e = ex;
             failed_resolve = true;
@@ -98,7 +97,7 @@ namespace Ipop {
         }
 
         if(!_forward_queries || failed_resolve) {
-          ProtocolLog.WriteIf(IpopLog.Dns, "Failed to resolve: " + qname + "\t" + e.Message);
+          ProtocolLog.WriteIf(IpopLog.Dns, "Failed to resolve: " + qname + "\n\t" + e.Message);
           rdnspacket = DnsPacket.BuildFailedReplyPacket(dnspacket);
         }
       }
