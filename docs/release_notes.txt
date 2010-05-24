@@ -1,4 +1,9 @@
 ===============================================================================
+Revision 9.4.8
+-------------------------------------------------------------------------------
+- If a proper lc.* certificate is in the certs dir but doesn't match the
+  current node's node id, it won't muck things up
+===============================================================================
 Revision 9.4.7
 -------------------------------------------------------------------------------
 - Fixed a rare bug in Brunet, which would effectively kill the system
