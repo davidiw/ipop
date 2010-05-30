@@ -1,4 +1,11 @@
 ===============================================================================
+Revision 9.4.9
+-------------------------------------------------------------------------------
+- In UDP, new Edges weren't being notified of their proper address mapping via
+  the remote EdgeListener as soon as they were created, which was preventing
+  NAT traversal.  I guess the same behavior should probably be added to the
+  TCP module, otherwise port forwarding and DMZ will fail for it as well.
+===============================================================================
 Revision 9.4.8
 -------------------------------------------------------------------------------
 - If a proper lc.* certificate is in the certs dir but doesn't match the
