@@ -1,4 +1,13 @@
 ===============================================================================
+Revision 9.4.11
+-------------------------------------------------------------------------------
+- Made Udp Send run in its own loop, in previous code, the Udp was blocking
+  causing weird delays in the system and breaking usefulness of IPOP.
+===============================================================================
+Revision 9.4.10
+-------------------------------------------------------------------------------
+- StaticDns is case insensitive
+===============================================================================
 Revision 9.4.9
 -------------------------------------------------------------------------------
 - In UDP, new Edges weren't being notified of their proper address mapping via
