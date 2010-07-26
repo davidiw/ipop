@@ -1,0 +1,7 @@
+#!/bin/bash
+version=`mono --version | grep version`
+dll=System.Runtime.Remoting.dl
+
+if [[ `echo $version | grep 2.0` ]]; then
+  ln -sf /opt/ipop/lib/$dll.dll.use_for_mono_2 /opt/ipop/lib/$dll
+fi

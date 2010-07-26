@@ -1,0 +1,8 @@
+#!/bin/bash
+version=`mono --version | grep version`
+mono_path=/usr/lib/mono
+dll=System.Runtime.Remoting
+
+if [[ `echo $version | grep 2.0` ]]; then
+  ln -sf $mono_path/gac/$dll/2*/$dll.dll $mono_path/2.0/$dll.dll
+fi
