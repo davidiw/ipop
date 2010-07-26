@@ -1,4 +1,12 @@
 ===============================================================================
+Revision 9.4.12
+-------------------------------------------------------------------------------
+- In Ubuntu, when performing self-domainname lookup, it performs AAAA
+  searches waaay before performing A searches, this creates significant delay
+  on operations that rely on self-lookups.  This patch assumes that an AAAA
+  search will be happy with an IPv4 address being returned.  The current code
+  cannot handle IPv6 addresses.
+===============================================================================
 Revision 9.4.11
 -------------------------------------------------------------------------------
 - Made Udp Send run in its own loop, in previous code, the Udp was blocking
