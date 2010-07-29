@@ -1,4 +1,11 @@
 ===============================================================================
+Revision 9.4.13
+-------------------------------------------------------------------------------
+- Throwing an exception in the Send loop of UDP causes a memory leak
+- Check UDP packet size before parsing
+- In UdpEL, unhandled exception, some packets may be too large to fit into the
+  buffer
+===============================================================================
 Revision 9.4.12
 -------------------------------------------------------------------------------
 - In Ubuntu, when performing self-domainname lookup, it performs AAAA
